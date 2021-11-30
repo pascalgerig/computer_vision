@@ -24,7 +24,6 @@ def get_normalization_matrix(x):
     centroid = np.mean(x, 1)
     centered_image = np.apply_along_axis(lambda point: point - centroid, 0, x)
     distance = np.array([])
-    # print(np.mean(centered_image, 1))
     for i in range(centered_image.shape[1]):
         temp = np.zeros(3)
         temp[0] = centered_image[0, i]
@@ -34,9 +33,6 @@ def get_normalization_matrix(x):
 
     mean_distance = np.mean(distance)
     scale_factor = np.sqrt(2)/mean_distance
-    # print(mean_distance)
-    # print(scale_factor)
-    # print(1/mean_distance)
 
     return np.array([[scale_factor, 0, -centroid[0] * scale_factor],
                      [0, scale_factor, -centroid[1] * scale_factor],
@@ -62,6 +58,9 @@ def eight_points_algorithm(x1, x2, normalize=True):
         # Normalize inputs
         n1 = np.apply_along_axis(lambda point: np.matmul(T1, point), 0, x1)
         n2 = np.apply_along_axis(lambda point: np.matmul(T2, point), 0, x2)
+    else:
+        n1 = x1
+        n2 = x2
 
     # Construct matrix A encoding the constraints on x1 and x2
     A = np.zeros((N, 9))
@@ -108,6 +107,8 @@ def plot_epipolar_line(im, F, x, e, plot=plt):
 
     The epipolar line corresponding to x is the line on which x could be in the other image.
     It is aswell the intersection between image plane and epipolar plane
+    The Epipole is a special point on the epipolar line, namely the point where all epipolar lines intersect,
+    this is the point where the camera center of the other image would be rendered
     """
     m, n = im.shape[:2]
     epipolar_line = np.dot(F, x)
@@ -115,4 +116,4 @@ def plot_epipolar_line(im, F, x, e, plot=plt):
     y = np.apply_along_axis(lambda entry: (epipolar_line[0] * entry + epipolar_line[2]) / (- epipolar_line[1]), 0, x)
     valid_range = (y >= 0) & (y < m)
     plot.plot(x[valid_range], y[valid_range], linewidth=2)
-    # plot.plot(e[0], e[1], 'ro')
+    plot.plot(e[0], e[1], 'ro')
