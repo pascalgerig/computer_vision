@@ -1,4 +1,6 @@
 import numpy as np
+import scipy.sparse as sparse
+from scipy.sparse.linalg import lsmr
 
 
 def get_normalization_matrix(x):
@@ -110,19 +112,13 @@ def ransac(x1, x2, threshold, num_steps=1000, random_seed=42):
             best_inliers_count = temp_inliers_count
             best_inliers = temp_inliers
 
-    print(np.where(best_inliers == False))
-    converged = False
-    while not converged:
+    while True:
         F = eight_points_algorithm(x1[:, best_inliers], x2[:, best_inliers])
-        print(np.where(best_inliers == False))
         error_indicator = np.square(np.sum(x2 * (np.matmul(F, x1)), axis=0))
         inliers = error_indicator < threshold
         if (inliers == best_inliers).all():
             return F, inliers  # F is estimated fundamental matrix and inliers is an indicator (boolean) numpy array
         best_inliers = inliers
-    # TODO calculate initial inliers with with the best candidate points
-    # TODO estimate F with all the inliers
-    # TODO find final inliers with F
 
 
 def decompose_essential_matrix(E, x1, x2):
@@ -137,6 +133,19 @@ def decompose_essential_matrix(E, x1, x2):
     Pl = np.concatenate((Rl, tl), axis=1)
 
     # TODO: Compute possible rotations and translations
+    U, S, V = np.linalg.svd(E)
+    if np.linalg.det(U) < 0:
+        U *= -1
+    if np.linalg.det(V) < 0:
+        V *= -1
+
+    W = np.array([[0, -1, 0],
+                  [1, 0, 0],
+                  [0, 0, 1]])
+    R1 = U @ W.T @ V
+    R2 = U @ W @ V
+    t1 = U[:,2].reshape(3, 1)
+    t2 = -t1
 
     # Four possibilities
     Pr = [np.concatenate((R1, t1), axis=1),
