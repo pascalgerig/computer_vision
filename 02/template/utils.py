@@ -1,6 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.linalg import null_space
 
 
 def get_normalization_matrix(x):
@@ -11,7 +9,7 @@ def get_normalization_matrix(x):
     have a mean distance of sqrt(2) to the center
     """
     # Input: x 3*N
-    # 
+    #
     # Output: T 3x3 transformation matrix of points
 
     # TODO TASK:
@@ -87,33 +85,113 @@ def eight_points_algorithm(x1, x2, normalize=True):
     return F
 
 
-def right_epipole(F):
+def ransac(x1, x2, threshold, num_steps=1000, random_seed=42):
+    if random_seed is not None:
+        np.random.seed(random_seed)  # we are using a random seed to make the results reproducible
+    best_inliers_count = 0
+    best_inliers = None
+
+    for _ in range(num_steps):
+        # Randomly sample 8 point corresponences
+        selectedPointIndizes = np.random.choice(x1.shape[1], 8, replace=False)
+        im1 = np.array(x1[:, selectedPointIndizes])
+        im2 = np.array(x2[:, selectedPointIndizes])
+
+        # Calculate F from 8 point correspondences
+        temp_F = eight_points_algorithm(im1, im2)
+
+        error_indicator = np.square(np.sum(x2 * (np.matmul(temp_F, x1)), axis=0))
+        temp_inliers = error_indicator < threshold
+        # TODO double check this with mean()
+        temp_inliers_count = temp_inliers.sum()
+
+        # F is currently best if number of inliers > previous highest count of inliers
+        if temp_inliers_count > best_inliers_count:
+            best_inliers_count = temp_inliers_count
+            best_inliers = temp_inliers
+
+    print(np.where(best_inliers == False))
+    converged = False
+    while not converged:
+        F = eight_points_algorithm(x1[:, best_inliers], x2[:, best_inliers])
+        print(np.where(best_inliers == False))
+        error_indicator = np.square(np.sum(x2 * (np.matmul(F, x1)), axis=0))
+        inliers = error_indicator < threshold
+        if (inliers == best_inliers).all():
+            return F, inliers  # F is estimated fundamental matrix and inliers is an indicator (boolean) numpy array
+        best_inliers = inliers
+    # TODO calculate initial inliers with with the best candidate points
+    # TODO estimate F with all the inliers
+    # TODO find final inliers with F
+
+
+def decompose_essential_matrix(E, x1, x2):
     """
-    Computes the (right) epipole from a fundamental matrix F.
-    (Use with F.T for left epipole.)
-
-    The epipole is the point, where the camera, that generates the other image, would be rendered
+    Decomposes E into a rotation and translation matrix using the
+    normalized corresponding points x1 and x2.
     """
 
-    # The epipole is the null space of F (F * e = 0)
-    e = null_space(F)
-    return e/e[2]
+    # Fix left camera-matrix
+    Rl = np.eye(3)
+    tl = np.array([[0, 0, 0]]).T
+    Pl = np.concatenate((Rl, tl), axis=1)
+
+    # TODO: Compute possible rotations and translations
+
+    # Four possibilities
+    Pr = [np.concatenate((R1, t1), axis=1),
+          np.concatenate((R1, t2), axis=1),
+          np.concatenate((R2, t1), axis=1),
+          np.concatenate((R2, t2), axis=1)]
+
+    # Compute reconstructions for all possible right camera-matrices
+    X3Ds = [infer_3d(x1[:, 0:1], x2[:, 0:1], Pl, x) for x in Pr]
+
+    # Compute projections on image-planes and find when both cameras see point
+    test = [np.prod(np.hstack((Pl @ np.vstack((X3Ds[i], [[1]])), Pr[i] @ np.vstack((X3Ds[i], [[1]])))) > 0, 1) for i in
+            range(4)]
+    test = np.array(test)
+    idx = np.where(np.hstack((test[0, 2], test[1, 2], test[2, 2], test[3, 2])) > 0.)[0][0]
+
+    # Choose correct matrix
+    Pr = Pr[idx]
+
+    return Pl, Pr
 
 
-def plot_epipolar_line(im, F, x, e, plot=plt):
-    """
-    Plot the epipole and epipolar line F*x=0 in an image. F is the fundamental matrix
-    and x a point in the other image.
+def infer_3d(x1, x2, Pl, Pr):
+    # INFER3D Infers 3d-positions of the point-correspondences x1 and x2, using
+    # the rotation matrices Rl, Rr and translation vectors tl, tr. Using a
+    # least-squares approach.
 
-    The epipolar line corresponding to x is the line on which x could be in the other image.
-    It is aswell the intersection between image plane and epipolar plane
-    The Epipole is a special point on the epipolar line, namely the point where all epipolar lines intersect,
-    this is the point where the camera center of the other image would be rendered
-    """
-    m, n = im.shape[:2]
-    epipolar_line = np.dot(F, x)
-    x = np.array(range(n))
-    y = np.apply_along_axis(lambda entry: (epipolar_line[0] * entry + epipolar_line[2]) / (- epipolar_line[1]), 0, x)
-    valid_range = (y >= 0) & (y < m)
-    plot.plot(x[valid_range], y[valid_range], linewidth=2)
-    plot.plot(e[0], e[1], 'ro')
+    M = x1.shape[1]
+    # Extract rotation and translation
+    Rl = Pl[:3, :3]
+    tl = Pl[:3, 3]
+    Rr = Pr[:3, :3]
+    tr = Pr[:3, 3]
+
+    # Construct matrix A with constraints on 3d points
+    row_idx = np.tile(np.arange(4 * M), (3, 1)).T.reshape(-1)
+    col_idx = np.tile(np.arange(3 * M), (1, 4)).reshape(-1)
+
+    A = np.zeros((4 * M, 3))
+    A[:M, :3] = x1[0:1, :].T @ Rl[2:3, :] - np.tile(Rl[0:1, :], (M, 1))
+    A[M:2 * M, :3] = x1[1:2, :].T @ Rl[2:3, :] - np.tile(Rl[1:2, :], (M, 1))
+    A[2 * M:3 * M, :3] = x2[0:1, :].T @ Rr[2:3, :] - np.tile(Rr[0:1, :], (M, 1))
+    A[3 * M:4 * M, :3] = x2[1:2, :].T @ Rr[2:3, :] - np.tile(Rr[1:2, :], (M, 1))
+
+    A = sparse.csr_matrix((A.reshape(-1), (row_idx, col_idx)), shape=(4 * M, 3 * M))
+
+    # Construct vector b
+    b = np.zeros((4 * M, 1))
+    b[:M] = np.tile(tl[0], (M, 1)) - x1[0:1, :].T * tl[2]
+    b[M:2 * M] = np.tile(tl[1], (M, 1)) - x1[1:2, :].T * tl[2]
+    b[2 * M:3 * M] = np.tile(tr[0], (M, 1)) - x2[0:1, :].T * tr[2]
+    b[3 * M:4 * M] = np.tile(tr[1], (M, 1)) - x2[1:2, :].T * tr[2]
+
+    # Solve for 3d-positions in a least-squares way
+    w = lsmr(A, b)[0]
+    x3d = w.reshape(M, 3).T
+
+    return x3d
